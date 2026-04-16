@@ -16,10 +16,10 @@ from rasterio.windows import from_bounds
 
 
 # ================= 路径与超参数配置 =================
-INPUT_DIR = r"F:\Py_Project\always\cluster\zone\inputs\starlink550_data\data_1100"
+INPUT_DIR = r"F:\Py_Project\always\cluster\zone\inputs\starlink550_data\data_2500"
 OUTPUT_DIR = r"F:\Py_Project\always\cluster\zone\outputs\tms"
 LANDSCAN_PATH = r"f:\Py_Project\always\cluster\zone\landscan-global-2024.tif"
-OUTPUT_PKL_NAME = "all_time_slices.pkl"  # 输出的统一 PKL 文件名
+OUTPUT_PKL_NAME = "data_2500_all_time_slices.pkl"  # 输出的统一 PKL 文件名
 
 NUM_SLICES = 500
 RADIUS_KM = 50  # 查询卫星附近最大人口密度的半径(公里)
