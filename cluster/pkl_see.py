@@ -1,14 +1,16 @@
 import pickle
 import pandas as pd
-# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/all_time_slices_cluster.pkl'
-# path = 'F:\Py_Project/always\cluster\zone\outputs/tms\step_0000_2026-03-25_00-37-08.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/Labels_starlink550_cluster.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms\starlink550_cluster.pkl'
 # path = 'F:\Py_Project/always\Build_datasets\Labels_Iridium_Max_Throughput.pkl'
-# path = 'F:\Py_Project/always\Build_datasets\Iridium_DataSetForAgent_75_60480.pkl'
-# path = 'F:\Py_Project/always\Build_datasets\Labels_Iridium_Optimized.pkl'
-# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/all_time_slices.pkl'
-path = 'F:\Py_Project/always\cluster\zone\outputs/tms/starlink550_cluster.pkl'
-# path = 'F:\Py_Project/always\cluster\zone\outputs/tms\Labels_starlink550_cluster.pkl'
 
+# path = 'F:\Py_Project/always\Build_datasets\Labels_Iridium_Optimized.pkl'
+path = 'F:\Py_Project/always\cluster\zone\outputs/tms/weights_slice_0_domain_None.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/slice_0_domain_0.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms\starlink550_cluster.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/starlink550.pkl'
+# path = 'F:\Py_Project/always\Build_datasets\StarLink_DataSetForAgent100_5000_A.pkl'
+# path = 'F:\Py_Project/always\cluster\zone\outputs/tms/starlink550_intra.pkl'
 
 f = open(path, 'rb')
 data = pickle.load(f)

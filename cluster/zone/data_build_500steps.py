@@ -20,15 +20,16 @@ try:
 except Exception:
     nx = None
 
+# 基于所有时间片的分域结果，构建一个全局的超节点图（保留全量物理链路），并基于最小跳数路径提取物理端点组合。
 # ================= 全局参数配置 =================
 N_CLUSTERS = 18
 MAX_PARALLEL_LINKS = 8
 
 def parse_args() -> argparse.Namespace:
     base_dir = Path(__file__).resolve().parent
-    default_cluster = base_dir / "outputs_all_steps"
+    default_cluster = base_dir / "outputs" / "starlink550_data_v1.5_domain_result_18_raan_orbital_angle.txt"
     default_tm = base_dir / "outputs" / "tms" / "all_time_slices.pkl"
-    out_pkl = base_dir / "outputs" / "tms" / "starlink550_cluster.pkl"
+    out_pkl = base_dir / "outputs" / "tms" / "all_time_slices_cluster.pkl"
 
     p = argparse.ArgumentParser()
     p.add_argument("--cluster_pkl", type=str, default=str(default_cluster))
@@ -39,7 +40,8 @@ def parse_args() -> argparse.Namespace:
 
 @dataclass(frozen=True)
 class ClusterResult:
-    sat_to_cluster_by_slice: List[Dict[int, int]]
+    sat_to_cluster_by_slice: Optional[List[Dict[int, int]]]
+    sat_to_cluster_global: Optional[Dict[int, int]]
     centers_xy: Optional[np.ndarray]
     radii: Optional[np.ndarray]
 
@@ -71,12 +73,31 @@ def _load_cluster_from_dir(cluster_dir: Path) -> ClusterResult:
         if m: step_idx_to_path[int(m.group(1))] = p
     ordered_steps = sorted(step_idx_to_path.keys())
     sat_to_cluster_by_slice = [_parse_cluster_txt(step_idx_to_path[i]) for i in ordered_steps]
-    return ClusterResult(sat_to_cluster_by_slice=sat_to_cluster_by_slice, centers_xy=None, radii=None)
+    return ClusterResult(sat_to_cluster_by_slice=sat_to_cluster_by_slice, sat_to_cluster_global=None, centers_xy=None, radii=None)
+
+def _parse_cluster_plane_angle_txt(path: Path) -> Dict[int, int]:
+    sat_to_cluster: Dict[int, int] = {}
+    with path.open("r", encoding="utf-8") as f:
+        header = [h.strip() for h in f.readline().strip().split(",")]
+        sat_idx = header.index("sat_id")
+        domain_idx = header.index("domain_id")
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            parts = [p.strip() for p in line.split(",")]
+            sat_id = int(parts[sat_idx])
+            domain_id = int(parts[domain_idx])
+            sat_to_cluster[sat_id] = domain_id
+    return sat_to_cluster
 
 def load_cluster_result(cluster_pkl: str) -> ClusterResult:
     p = Path(cluster_pkl)
     if p.is_dir(): return _load_cluster_from_dir(p)
-    raise ValueError(f"请提供有效的 cluster 目录")
+    if not p.exists(): raise FileNotFoundError()
+    if p.suffix.lower() == ".txt":
+        sat_to_cluster_global = _parse_cluster_plane_angle_txt(p)
+        return ClusterResult(sat_to_cluster_by_slice=None, sat_to_cluster_global=sat_to_cluster_global, centers_xy=None, radii=None)
+    raise ValueError(f"请提供有效的 cluster 目录或 TXT 文件")
 
 def load_original_tm(tm_pkl: str) -> List[dict]:
     with Path(tm_pkl).open("rb") as f:
@@ -174,35 +195,50 @@ def _validate_super_dataset(super_slices: List[dict], out_pkl: Path) -> None:
     assert isinstance(tm0, dict)
     for k, v in tm0.items(): assert v > 0
     for s in super_slices:
-        for a, b in s["graph"]:
-            paths = s["path"].get(f"{int(a)}, {int(b)}")
+        for k, paths in s["path"].items():
             assert isinstance(paths, list)
             assert len(paths) == MAX_PARALLEL_LINKS
 
 def _build_super_dataset(cluster: ClusterResult, original_slices: List[dict]) -> List[dict]:
     super_slices: List[dict] = []
-    
+
     for idx, s in enumerate(original_slices):
         data_idx = int(s["data_idx"])
-        if data_idx >= len(cluster.sat_to_cluster_by_slice): continue
-            
-        sat_to_cluster = cluster.sat_to_cluster_by_slice[data_idx]
+        if cluster.sat_to_cluster_global is not None:
+            sat_to_cluster = cluster.sat_to_cluster_global
+        else:
+            if cluster.sat_to_cluster_by_slice is None or data_idx >= len(cluster.sat_to_cluster_by_slice): continue
+            sat_to_cluster = cluster.sat_to_cluster_by_slice[data_idx]
+
         graph = s["graph"]
         tm = s["tm"]
 
         # 使用纯净版逻辑：直接找物理边界线段
-        super_graph, super_paths_all = build_super_topology_direct_links(
+        super_graph_edges, super_paths_all = build_super_topology_direct_links(
             original_graph=graph,
             sat_to_cluster=sat_to_cluster,
             n_clusters=N_CLUSTERS
         )
-        
-        super_paths_top8 = {
-            k: _select_top_k_paths_direct(v, k=MAX_PARALLEL_LINKS) for k, v in super_paths_all.items()
-        }
-        super_tm = aggregate_traffic(tm, sat_to_cluster)
 
-        super_slices.append({"graph": super_graph, "tm": super_tm, "path": super_paths_top8, "data_idx": data_idx})
+        super_tm = aggregate_traffic(tm, sat_to_cluster)
+        
+        # graph恢复为真实的物理拓扑边
+        super_graph = super_graph_edges
+        
+        # 剔除0数据，并且path的数量应该和tm的数量一致
+        super_tm_filtered = {}
+        super_paths_top8 = {}
+        for k, v in super_tm.items():
+            if v > 0:
+                super_tm_filtered[k] = v
+                parts = k.split(",")
+                # 如果没有物理边界线段，就补齐（孤立点或没直接连接，但有流量）
+                paths = super_paths_all.get(k, [])
+                if not paths:
+                    paths = [[int(parts[0]), int(parts[1])]]
+                super_paths_top8[k] = _select_top_k_paths_direct(paths, k=MAX_PARALLEL_LINKS)
+
+        super_slices.append({"graph": super_graph, "tm": super_tm_filtered, "path": super_paths_top8, "data_idx": data_idx})
 
         if (idx + 1) % 50 == 0:
             print(f"已聚合完成 {idx + 1}/{len(original_slices)} 个时间片")

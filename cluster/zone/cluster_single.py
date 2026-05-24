@@ -1,5 +1,7 @@
 import os
 import numpy as np
+import pandas as pd
+import networkx as nx
 import matplotlib.pyplot as plt
 from collections import defaultdict
 import math
@@ -7,7 +9,7 @@ import math
 # 配置区：全局参数定义，控制卫星分域全流程
 # =========================
 # 输入数据文件夹：Starlink550卫星轨迹step文件
-INPUT_FOLDER = r"F:\Py_Project\always\cluster\zone\inputs\starlink550_data\data_1100"   # 当前工作目录是 RedTE-main
+INPUT_FOLDER = r"F:\Py_Project\always\cluster\zone\inputs\starlink550_data"   # 当前工作目录是 RedTE-main
 # 输出文件夹：保存分域结果、图片、文本
 OUTPUT_FOLDER = r"F:\Py_Project\always\cluster\zone\outputs"
 # 地球半径（单位：km），用于轨道计算
