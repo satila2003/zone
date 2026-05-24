@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"F:/Py_Project/always\" push github master)"
+    ]
+  }
+}
