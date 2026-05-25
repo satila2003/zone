@@ -84,31 +84,73 @@ def load_cluster_data(filepath, time_idx=0, cluster_id=0, default_capacity=300.0
 # 2. ECMP 真实环境验证模块
 # ==========================================
 def evaluate_ecmp_mlu(G, traffic_matrix, int_weights):
+    """在给定整数链路权重下，模拟真实 ECMP 路由，计算最大链路利用率（MLU）。
+
+    ECMP（Equal-Cost Multi-Path）路由规则：
+    - 对每一对源-目的节点，路由器只看「权重和最小」的路径。
+    - 如果有多条路径的权重和并列最小，流量在这些路径上严格均分（1:1:1...）。
+    - 权重和大于最小值的路径不会收到任何流量。
+
+    参数:
+        G: networkx.DiGraph，有向图，每条边已有 'c'（容量）属性
+        traffic_matrix: dict, {(src, dst): demand} 流量需求矩阵
+        int_weights: np.ndarray, 与 G.edges() 顺序一一对应的整数链路权重
+
+    返回:
+        float: 网络中最大链路利用率（MLU = max(链路流量 / 链路容量)）
+    """
+
+    # ---------- 步骤0：将优化出的权重写入图中 ----------
+    # G.edges(data=True) 返回 [(u, v, {attr_dict}), ...]
+    # int_weights 的顺序与 G.edges() 严格一致（因为图从未被重建）
     for i, (u, v, data) in enumerate(G.edges(data=True)):
-        data['weight'] = int_weights[i]
-        
+        data['weight'] = int_weights[i]   # 用整数权重替换原来的浮点权重
+
+    # 初始化每条有向链路的累计流量为 0
+    # link_flows 的 key 是 (u, v) 元组，value 是该链路上承载的总流量
     link_flows = {e: 0.0 for e in G.edges()}
-    
+
+    # ---------- 步骤1：逐对源-目的节点，按 ECMP 规则分配流量 ----------
     for (s, d), demand in traffic_matrix.items():
+        # 跳过无需求或同节点的无效条目
         if demand <= 0 or s == d:
             continue
+
         try:
+            # ★ ECMP 核心 ★
+            # nx.all_shortest_paths 找出 s→d 之间所有权重和最小的路径
+            # "权重和最小" 用的是边上 'weight' 属性的累加值
+            # 如果有多条路径的权重和完全相同且都是最小值，全部返回
+            # 权重和比最小值大的路径不会出现在这个列表中
             paths = list(nx.all_shortest_paths(G, s, d, weight='weight'))
+
+            # 多少条等cost最短路径
             num_paths = len(paths)
+
+            # ★ 流量均分 ★
+            # ECMP 规则：每条等cost最短路径分得完全相同的流量
+            # 例：100Mbps 需求 ÷ 3条等cost路径 = 每路径 33.33Mbps
             flow_per_path = demand / num_paths
+
+            # 将分摊后的流量累加到路径经过的每条有向边上
             for path in paths:
+                # path 是节点序列，如 [5, 12, 8, 3]
+                # 每次取相邻两个节点构成一条边 (path[i], path[i+1])
                 for i in range(len(path) - 1):
                     link_flows[(path[i], path[i+1])] += flow_per_path
+
         except nx.NetworkXNoPath:
+            # s 和 d 之间没有任何路径可达（图不连通时可能出现）
             continue
-            
+
+    # ---------- 步骤2：计算最大链路利用率（MLU）----------
     max_utilization = 0.0
     for u, v, data in G.edges(data=True):
-        cap = data['c']
-        util = link_flows[(u, v)] / cap
+        cap = data['c']                            # 链路容量
+        util = link_flows[(u, v)] / cap            # 利用率 = 累计流量 ÷ 容量
         if util > max_utilization:
-            max_utilization = util
-            
+            max_utilization = util                 # 记录最高的那条
+
     return max_utilization
 
 # ==========================================
