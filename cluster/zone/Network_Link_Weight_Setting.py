@@ -1,6 +1,3 @@
-import time
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -138,180 +135,120 @@ class SmoothRoutingModel(nn.Module):
 # ==========================================
 # 4. 优化主流程
 # ==========================================
-def optimize_cluster_weights(filepath, time_idx=0, cluster_id=0, k=8,
-                             alpha_stages=None, device='cuda'):
-    """多阶段温度退火优化。
-
-    alpha_stages: list of (alpha, epochs) 元组，默认为三阶段退火。
-    """
-    if alpha_stages is None:
-        alpha_stages = [(1.0, 80), (5.0, 60), (20.0, 60)]
-
+def optimize_cluster_weights(filepath, time_idx=0, cluster_id=0, k=8, alpha=10.0, epochs=200, device='cuda'):
     print(f"\n---> 开始处理: 时间片 {time_idx} | 分簇 {cluster_id}")
-    print(f"    退火阶段: {' → '.join(f'α={a}({e}轮)' for a, e in alpha_stages)}")
-
-    # 时间记录
-    timing_info = {
-        'cluster_id': cluster_id,
-        'stage_times': [],
-        'epoch_times': [],
-        'total_time': 0.0,
-    }
-    cluster_start = time.time()
-
+    
     # 使用定制函数加载本簇数据
     nodes, edges, traffic_matrix = load_cluster_data(filepath, time_idx, cluster_id)
-
+    
     num_links = len(edges)
     sd_pairs = [(s, d, dem) for (s, d), dem in traffic_matrix.items() if dem > 0 and s != d]
     num_sd = len(sd_pairs)
-
+    
     print(f"节点数: {len(nodes)}, 链路数: {num_links}, 有效SD流数: {num_sd}")
-
+    
+    # 【新增保护机制】：如果该簇没有流量（例如示例中的簇1、簇5等），直接返回默认权重
     if num_sd == 0:
-        elapsed = time.time() - cluster_start
-        timing_info['total_time'] = elapsed
-        print(f"💡 该簇没有有效流量需求，默认赋予全1链路权重。 (耗时 {elapsed:.2f}s)")
-        return np.ones(num_links, dtype=int), 0.0, timing_info
+        print("💡 该簇没有有效流量需求，默认赋予全1链路权重。")
+        return np.ones(num_links, dtype=int), 0.0
 
     G = nx.DiGraph()
     for i, edge in enumerate(edges):
         G.add_edge(edge['u'], edge['v'], c=edge['c'], id=i, weight=1.0)
 
+    # 梯度下降优化    
     model = SmoothRoutingModel(num_links).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
 
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    
     capacities = torch.tensor([e['c'] for e in edges], dtype=torch.float32).to(device)
     demands = torch.tensor([dem for _, _, dem in sd_pairs], dtype=torch.float32).view(-1, 1).to(device)
-
-    global_epoch = 0
-    for stage_idx, (alpha, stage_epochs) in enumerate(alpha_stages):
-        stage_start = time.time()
-        stage_name = f"阶段{stage_idx+1} (α={alpha})"
-        print(f"  [{stage_name}] 开始, 共 {stage_epochs} 轮")
-
-        for epoch in range(stage_epochs):
-            epoch_start = time.time()
-            model.train()
-            optimizer.zero_grad()
-
-            with torch.no_grad():
-                current_w_sq = (model.w ** 2).cpu().numpy()
-                for i, (u, v, data) in enumerate(G.edges(data=True)):
-                    data['weight'] = float(current_w_sq[i])
-
-            P_matrix = torch.zeros((num_sd, k, num_links), dtype=torch.float32).to(device)
-            valid_mask = torch.zeros((num_sd, k), dtype=torch.bool).to(device)
-
-            for i, (s, d, _) in enumerate(sd_pairs):
-                try:
-                    k_paths = list(islice(nx.shortest_simple_paths(G, s, d, weight='weight'), k))
-                    for j, path in enumerate(k_paths):
-                        valid_mask[i, j] = True
-                        for step in range(len(path) - 1):
-                            u, v = path[step], path[step+1]
-                            link_id = G[u][v]['id']
-                            P_matrix[i, j, link_id] = 1.0
-                except nx.NetworkXNoPath:
-                    pass
-
-            loss = model(P_matrix, valid_mask, demands, capacities, alpha=alpha)
-            loss.backward()
-            optimizer.step()
-
-            global_epoch += 1
-            epoch_time = time.time() - epoch_start
-            timing_info['epoch_times'].append(epoch_time)
-
-            if (epoch + 1) % 20 == 0 or (epoch + 1) == stage_epochs:
-                print(f"    Epoch {epoch+1:3d}/{stage_epochs} - 预测MLU: {loss.item():.4f} | 本轮耗时: {epoch_time:.2f}s")
-
-        stage_time = time.time() - stage_start
-        timing_info['stage_times'].append(stage_time)
-        print(f"  [{stage_name}] 完成, 阶段耗时: {stage_time:.2f}s")
+    
+    for epoch in range(epochs):
+        model.train() # 这里其实就是梯度下降
+        optimizer.zero_grad()
+        
+        with torch.no_grad():
+            current_w_sq = (model.w ** 2).cpu().numpy()
+            for i, (u, v, data) in enumerate(G.edges(data=True)):
+                data['weight'] = float(current_w_sq[i])
+        
+        P_matrix = torch.zeros((num_sd, k, num_links), dtype=torch.float32).to(device)
+        valid_mask = torch.zeros((num_sd, k), dtype=torch.bool).to(device)
+        
+        for i, (s, d, _) in enumerate(sd_pairs):
+            try:
+                k_paths = list(islice(nx.shortest_simple_paths(G, s, d, weight='weight'), k))
+                for j, path in enumerate(k_paths):
+                    valid_mask[i, j] = True
+                    for step in range(len(path) - 1):
+                        u, v = path[step], path[step+1]
+                        link_id = G[u][v]['id']
+                        P_matrix[i, j, link_id] = 1.0
+            except nx.NetworkXNoPath:
+                pass 
+        
+        loss = model(P_matrix, valid_mask, demands, capacities, alpha=alpha)
+        
+        loss.backward()
+        optimizer.step()
+        
+        if (epoch + 1) % 50 == 0:
+            print(f"  Iteration {epoch+1}/{epochs} - 预测最大链路利用率: {loss.item():.4f}")
 
     # 生成可行域解 (Integerization)
     best_mlu = float('inf')
     best_integer_weights = None
-
+    
     with torch.no_grad():
         final_w_sq = (model.w ** 2).cpu().numpy()
         for s_factor in range(1, 11):
             int_weights = np.ceil(s_factor * final_w_sq).astype(int)
-            int_weights = np.maximum(int_weights, 1)
+            int_weights = np.maximum(int_weights, 1) 
             ecmp_mlu = evaluate_ecmp_mlu(G, traffic_matrix, int_weights)
-
+            
             if ecmp_mlu < best_mlu:
                 best_mlu = ecmp_mlu
                 best_integer_weights = int_weights
 
-    total_elapsed = time.time() - cluster_start
-    timing_info['total_time'] = total_elapsed
-    print(f"✅ 分簇 {cluster_id} 优化完成! 最终 ECMP MLU: {best_mlu:.4f} | 总耗时: {total_elapsed:.2f}s")
-    return best_integer_weights, best_mlu, timing_info
+    print(f"✅ 分簇 {cluster_id} 优化完成! 最终 ECMP 最大链路利用率 (MLU): {best_mlu:.4f}")
+    return best_integer_weights, best_mlu
 
 # ==========================================
 # 执行入口 (一键计算一个时间片内的所有簇)
 # ==========================================
 if __name__ == "__main__":
     dataset_file = r"F:\Py_Project\always\cluster\zone\outputs\tms\starlink550_intra.pkl"
-    output_log = Path(__file__).parent / "result.txt"
-
+    
     run_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"当前运行设备: {run_device.upper()}")
-
+    
+    # 假设我们计算第 0 个时间片
     target_time_idx = 0
-    num_clusters = 18
-
-    # 三阶段温度退火: α=1(探索) → α=5(过渡) → α=20(逼近ECMP)
-    alpha_stages = [(1.0, 80), (5.0, 60), (20.0, 60)]
-
+    # 你的数据中有 0 到 17 共 18 个簇
+    num_clusters = 18 
+    
+    # 用于保存该时间片下所有簇的权重
     time_slice_weights = {}
-    all_timing = {}
-    total_start = time.time()
+    
+    for c_id in range(num_clusters):
+        final_weights, final_mlu = optimize_cluster_weights(
+            filepath=dataset_file, 
+            time_idx=target_time_idx,
+            cluster_id=c_id,
+            k=8, 
+            alpha=10.0, 
+            epochs=200, 
+            device=run_device 
+        )
+        
+        time_slice_weights[c_id] = final_weights
 
-    with open(output_log, 'w', encoding='utf-8') as log:
-        log.write("===== 链路权重优化 时间统计 =====\n")
-        log.write(f"设备: {run_device.upper()}\n")
-        log.write(f"退火阶段: {' → '.join(f'α={a}({e}轮)' for a, e in alpha_stages)}\n")
-        log.write("=" * 50 + "\n\n")
-
-        for c_id in range(num_clusters):
-            final_weights, final_mlu, timing = optimize_cluster_weights(
-                filepath=dataset_file,
-                time_idx=target_time_idx,
-                cluster_id=c_id,
-                k=8,
-                alpha_stages=alpha_stages,
-                device=run_device
-            )
-
-            time_slice_weights[c_id] = final_weights
-            all_timing[c_id] = timing
-
-            # 写入该簇的详细时间统计
-            log.write(f"--- 分簇 {c_id} ---\n")
-            log.write(f"  节点/链路/流数: 见控制台输出\n")
-            log.write(f"  最终ECMP MLU: {final_mlu:.4f}\n")
-            for si, st in enumerate(timing['stage_times']):
-                log.write(f"  阶段{si+1} (α={alpha_stages[si][0]}): {st:.2f}s\n")
-            log.write(f"  总耗时: {timing['total_time']:.2f}s\n")
-            avg_epoch = (sum(timing['epoch_times']) / len(timing['epoch_times'])
-                         if timing['epoch_times'] else 0)
-            log.write(f"  每轮平均耗时: {avg_epoch:.2f}s\n\n")
-
-        total_elapsed = time.time() - total_start
-        log.write("=" * 50 + "\n")
-        log.write(f"所有18个分簇总耗时: {total_elapsed:.2f}s ({total_elapsed/60:.2f}min)\n")
-
-        # 逐epoch耗时汇总
-        all_epoch_times = []
-        for c_id in range(num_clusters):
-            all_epoch_times.extend(all_timing[c_id]['epoch_times'])
-        if all_epoch_times:
-            log.write(f"全部epoch平均耗时: {np.mean(all_epoch_times):.2f}s (min: {np.min(all_epoch_times):.2f}s, max: {np.max(all_epoch_times):.2f}s)\n")
-
-    print(f"\n📄 时间统计已写入: {output_log}")
     print("\n==================================================")
     print("🎯 时间片 0 的所有分簇计算完毕！")
     print("==================================================")
+    
+    # time_slice_weights 现在包含 {0: [权重数组], 1: [权重数组], ... 17: [权重数组]}
+    # 如果你想把它存下来供后续系统调用，可以使用 pickle：
+    # with open('optimized_weights_t0.pkl', 'wb') as f:
+    #     pickle.dump(time_slice_weights, f)
