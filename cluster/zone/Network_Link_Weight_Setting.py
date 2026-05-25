@@ -189,7 +189,7 @@ def optimize_cluster_weights(filepath, time_idx=0, cluster_id=0, k=8, alpha=10.0
     
     print(f"节点数: {len(nodes)}, 链路数: {num_links}, 有效SD流数: {num_sd}")
     
-    # 【新增保护机制】：如果该簇没有流量（例如示例中的簇1、簇5等），直接返回默认权重是
+    # 【新增保护机制】：如果该簇没有流量（例如示例中的簇1、簇5等），直接返回默认权重是s
     if num_sd == 0:
         print("💡 该簇没有有效流量需求，默认赋予全1链路权重。")
         return np.ones(num_links, dtype=int), 0.0
